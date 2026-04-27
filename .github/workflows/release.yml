@@ -41,6 +41,8 @@ jobs:
             --compile \
             --minify \
             --env inline \
+            --external electron \
+            --external chromium-bidi \
             --target="$BUN_TARGET" \
             src/cli.ts \
             --outfile dist/ytfeed
