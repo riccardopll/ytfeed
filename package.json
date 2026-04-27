@@ -1,13 +1,13 @@
 {
-  "name": "aragosta-yt",
+  "name": "ytfeed",
   "version": "0.1.0",
   "description": "Scrape videos from the YouTube homepage into an LLM-friendly format.",
   "type": "module",
   "bin": {
-    "gosta": "dist/gosta"
+    "ytfeed": "dist/ytfeed"
   },
   "scripts": {
-    "build": "bun run typecheck && bun build --compile --external electron --external chromium-bidi --outfile dist/gosta src/cli.ts",
+    "build": "bun run typecheck && bun build --compile --external electron --external chromium-bidi --outfile dist/ytfeed src/cli.ts",
     "install-browser": "playwright install chromium",
     "login": "bun src/cli.ts login",
     "scrape": "bun src/cli.ts scrape",

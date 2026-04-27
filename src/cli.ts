@@ -30,6 +30,8 @@ type ScrapedVideo = {
   thumbnail: string | null;
 };
 
+type ScrapedVideoData = Omit<ScrapedVideo, "index">;
+
 type ScrapeResult = {
   scrapedAt: string;
   limit: number;
@@ -55,7 +57,7 @@ const parseArgs = (argv: string[]) => {
   const program = new Command();
 
   program
-    .name("gosta")
+    .name("ytfeed")
     .description(
       "Scrape videos from the YouTube homepage into an LLM-friendly format.",
     )
@@ -64,9 +66,9 @@ const parseArgs = (argv: string[]) => {
       "after",
       `
 Examples:
-  gosta login
-  gosta scrape --limit 20
-  gosta scrape --limit 20 --format json`,
+  ytfeed login
+  ytfeed scrape --limit 20
+  ytfeed scrape --limit 20 --format json`,
     );
 
   program
@@ -115,6 +117,31 @@ const parsePositiveInteger = (value: string) => {
   return parsed;
 };
 
+const mergeScrapedVideo = (
+  existing: ScrapedVideoData | undefined,
+  next: ScrapedVideoData,
+) => {
+  if (!existing) {
+    return next;
+  }
+
+  return {
+    title: existing.title || next.title,
+    url: existing.url || next.url,
+    videoId: existing.videoId ?? next.videoId,
+    channel: existing.channel ?? next.channel,
+    channelUrl: existing.channelUrl ?? next.channelUrl,
+    duration: existing.duration ?? next.duration,
+    views: existing.views ?? next.views,
+    published: existing.published ?? next.published,
+    metadata:
+      existing.metadata.length >= next.metadata.length
+        ? existing.metadata
+        : next.metadata,
+    thumbnail: existing.thumbnail ?? next.thumbnail,
+  };
+};
+
 const launchContext = async (headless: boolean) => {
   const context = await chromium.launchPersistentContext(sessionProfile, {
     headless,
@@ -159,9 +186,21 @@ const scrapeHomepage = async (options: CliOptions) => {
     await dismissConsentIfPresent(page);
 
     let videos: ScrapedVideo[] = [];
+    const videoData = new Map<string, ScrapedVideoData>();
+    const videoOrder: string[] = [];
+    const toIndexedVideos = () => {
+      const orderedVideos: ScrapedVideo[] = [];
+      for (const key of videoOrder) {
+        const video = videoData.get(key);
+        if (video) {
+          orderedVideos.push({ ...video, index: orderedVideos.length + 1 });
+        }
+      }
+      return orderedVideos.slice(0, options.limit);
+    };
 
     for (let attempt = 0; attempt <= scrollAttempts; attempt += 1) {
-      videos = await page.evaluate(
+      const currentVideos = await page.evaluate(
         ({ limit }) => {
           type BrowserElement = {
             textContent: string | null;
@@ -256,7 +295,7 @@ const scrapeHomepage = async (options: CliOptions) => {
           );
 
           const seen = new Set<string>();
-          const result: Omit<ScrapedVideo, "index">[] = [];
+          const result: ScrapedVideoData[] = [];
 
           for (const card of cards) {
             const anchorCandidates = queryAll(
@@ -409,17 +448,104 @@ const scrapeHomepage = async (options: CliOptions) => {
             }
           }
 
-          return result.map((video, index) => ({ ...video, index: index + 1 }));
+          return result;
         },
         { limit: options.limit },
       );
 
-      if (videos.length >= options.limit) {
+      for (const video of currentVideos) {
+        const key = video.videoId ?? video.url;
+        if (!videoData.has(key)) {
+          videoOrder.push(key);
+        }
+
+        videoData.set(key, mergeScrapedVideo(videoData.get(key), video));
+      }
+
+      videos = toIndexedVideos();
+
+      if (
+        videos.length >= options.limit &&
+        videos.every((video) => video.thumbnail)
+      ) {
         break;
       }
 
       await page.mouse.wheel(0, 1800);
       await page.waitForTimeout(900);
+    }
+
+    const thumbnailAttempts = new Set<string>();
+    while (true) {
+      const video = videos.find(
+        (candidate) =>
+          !candidate.thumbnail &&
+          candidate.videoId &&
+          !thumbnailAttempts.has(candidate.videoId),
+      );
+      if (!video?.videoId) {
+        break;
+      }
+      thumbnailAttempts.add(video.videoId);
+
+      const thumbnail = await page.evaluate(async (videoId) => {
+        type BrowserElement = {
+          getAttribute(name: string): string | null;
+          querySelector(selector: string): BrowserElement | null;
+          querySelectorAll(selector: string): ArrayLike<BrowserElement>;
+          scrollIntoView(options?: unknown): void;
+        };
+        type BrowserDocument = {
+          querySelectorAll(selector: string): ArrayLike<BrowserElement>;
+        };
+
+        const browserGlobal = globalThis as typeof globalThis & {
+          document: BrowserDocument;
+          location: {
+            origin: string;
+          };
+        };
+
+        const cards = Array.from(
+          browserGlobal.document.querySelectorAll(
+            "ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer",
+          ),
+        );
+        const card = cards.find((item) =>
+          item.querySelector(`a[href*='${videoId}']`),
+        );
+        if (!card) {
+          return null;
+        }
+
+        card.scrollIntoView({ block: "center" });
+        await new Promise((resolve) => setTimeout(resolve, 900));
+
+        const image =
+          card.querySelector("img#img[src]") ??
+          card.querySelector("img[src]") ??
+          card.querySelector("img[data-thumb]");
+        const value =
+          image?.getAttribute("src") ?? image?.getAttribute("data-thumb");
+        if (!value) {
+          return null;
+        }
+
+        try {
+          return new URL(value, browserGlobal.location.origin).toString();
+        } catch {
+          return null;
+        }
+      }, video.videoId);
+
+      if (thumbnail) {
+        const key = video.videoId ?? video.url;
+        const existing = videoData.get(key);
+        if (existing) {
+          videoData.set(key, { ...existing, thumbnail });
+          videos = toIndexedVideos();
+        }
+      }
     }
 
     return {
@@ -530,7 +656,7 @@ main().catch((error: unknown) => {
 
   if (/process singleton|user data directory|profile/i.test(message)) {
     console.error(
-      "The scraper stores login data in `.youtube-session`. Run `gosta login` if the session needs to be refreshed.",
+      "The scraper stores login data in `.youtube-session`. Run `ytfeed login` if the session needs to be refreshed.",
     );
   }
 
