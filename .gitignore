@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.youtube-session/
+*.bun-build
+.*.bun-build
+.DS_Store
+*.log
