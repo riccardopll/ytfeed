@@ -7,7 +7,7 @@
     "ytfeed": "dist/ytfeed"
   },
   "scripts": {
-    "build": "bun run typecheck && bun build --compile --external electron --external chromium-bidi --outfile dist/ytfeed src/cli.ts",
+    "build": "bun run typecheck && bun build --compile --external electron --outfile dist/ytfeed src/cli.ts",
     "install-browser": "playwright install chromium",
     "login": "bun src/cli.ts login",
     "scrape": "bun src/cli.ts scrape",
@@ -15,6 +15,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "chromium-bidi": "^15.0.0",
     "commander": "^14.0.3",
     "playwright": "^1.52.0"
   },
