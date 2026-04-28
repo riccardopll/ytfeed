@@ -16,4 +16,4 @@ brew install riccardopll/tap/ytfeed
 | `ytfeed login`                               | Open YouTube in a visible browser and save the session. |
 | `ytfeed scrape --limit 10 --format <format>` | Export YouTube homepage videos.                         |
 
-Supported export formats: `json`, `toon`. Default: `toon`.
+Supported export formats: `toon (default)`, `json`.
