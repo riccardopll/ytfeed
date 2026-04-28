@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { Command, InvalidArgumentError, Option } from "commander";
 import { chromium, type Page } from "playwright";
+import { encode } from "@toon-format/toon";
 
 type CliCommand = "scrape" | "login";
-type OutputFormat = "markdown" | "json";
+type OutputFormat = "json" | "toon";
 
 type CliOptions = {
   command: CliCommand;
@@ -27,7 +28,6 @@ type ScrapedVideo = {
   views: string | null;
   published: string | null;
   metadata: string[];
-  thumbnail: string | null;
 };
 
 type ScrapedVideoData = Omit<ScrapedVideo, "index">;
@@ -45,7 +45,7 @@ const machineTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const scrapeTimeoutMs = 30_000;
 const scrollAttempts = 8;
 const defaultLimit = 20;
-const defaultFormat: OutputFormat = "markdown";
+const defaultFormat: OutputFormat = "toon";
 const defaultCliOptions: CliOptions = {
   command: "scrape",
   limit: defaultLimit,
@@ -82,7 +82,7 @@ Examples:
     )
     .addOption(
       new Option("-f, --format <format>", "Output format.")
-        .choices(["markdown", "json"])
+        .choices(["json", "toon"])
         .default(defaultFormat),
     )
     .action((options: ScrapeCommandOptions) => {
@@ -138,7 +138,6 @@ const mergeScrapedVideo = (
       existing.metadata.length >= next.metadata.length
         ? existing.metadata
         : next.metadata,
-    thumbnail: existing.thumbnail ?? next.thumbnail,
   };
 };
 
@@ -319,14 +318,7 @@ const scrapeHomepage = async (options: CliOptions) => {
               anchorCandidates[0] ??
               null;
 
-            const thumbnailAnchor =
-              query<BrowserAnchor>(card, "a#thumbnail[href*='/watch?v=']") ??
-              anchorCandidates.find((anchor) =>
-                isTimecode(normalizeText(anchor.textContent)),
-              ) ??
-              null;
-
-            const url = absoluteUrl(titleAnchor?.href ?? thumbnailAnchor?.href);
+            const url = absoluteUrl(titleAnchor?.href);
             if (!url) {
               continue;
             }
@@ -405,14 +397,6 @@ const scrapeHomepage = async (options: CliOptions) => {
               .map((anchor) => normalizeText(anchor.textContent))
               .find(isTimecode);
 
-            const image =
-              query<BrowserElement>(card, "img#img[src]") ??
-              query<BrowserElement>(card, "img[src]") ??
-              query<BrowserElement>(card, "img[data-thumb]");
-            const thumbnailUrl = absoluteUrl(
-              image?.getAttribute("src") ?? image?.getAttribute("data-thumb"),
-            );
-
             const title = normalizeText(
               titleAnchor?.textContent ??
                 titleAnchor?.getAttribute("title") ??
@@ -440,7 +424,6 @@ const scrapeHomepage = async (options: CliOptions) => {
               views,
               published,
               metadata,
-              thumbnail: thumbnailUrl,
             });
 
             if (result.length >= limit) {
@@ -464,88 +447,12 @@ const scrapeHomepage = async (options: CliOptions) => {
 
       videos = toIndexedVideos();
 
-      if (
-        videos.length >= options.limit &&
-        videos.every((video) => video.thumbnail)
-      ) {
+      if (videos.length >= options.limit) {
         break;
       }
 
       await page.mouse.wheel(0, 1800);
       await page.waitForTimeout(900);
-    }
-
-    const thumbnailAttempts = new Set<string>();
-    while (true) {
-      const video = videos.find(
-        (candidate) =>
-          !candidate.thumbnail &&
-          candidate.videoId &&
-          !thumbnailAttempts.has(candidate.videoId),
-      );
-      if (!video?.videoId) {
-        break;
-      }
-      thumbnailAttempts.add(video.videoId);
-
-      const thumbnail = await page.evaluate(async (videoId) => {
-        type BrowserElement = {
-          getAttribute(name: string): string | null;
-          querySelector(selector: string): BrowserElement | null;
-          querySelectorAll(selector: string): ArrayLike<BrowserElement>;
-          scrollIntoView(options?: unknown): void;
-        };
-        type BrowserDocument = {
-          querySelectorAll(selector: string): ArrayLike<BrowserElement>;
-        };
-
-        const browserGlobal = globalThis as typeof globalThis & {
-          document: BrowserDocument;
-          location: {
-            origin: string;
-          };
-        };
-
-        const cards = Array.from(
-          browserGlobal.document.querySelectorAll(
-            "ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer",
-          ),
-        );
-        const card = cards.find((item) =>
-          item.querySelector(`a[href*='${videoId}']`),
-        );
-        if (!card) {
-          return null;
-        }
-
-        card.scrollIntoView({ block: "center" });
-        await new Promise((resolve) => setTimeout(resolve, 900));
-
-        const image =
-          card.querySelector("img#img[src]") ??
-          card.querySelector("img[src]") ??
-          card.querySelector("img[data-thumb]");
-        const value =
-          image?.getAttribute("src") ?? image?.getAttribute("data-thumb");
-        if (!value) {
-          return null;
-        }
-
-        try {
-          return new URL(value, browserGlobal.location.origin).toString();
-        } catch {
-          return null;
-        }
-      }, video.videoId);
-
-      if (thumbnail) {
-        const key = video.videoId ?? video.url;
-        const existing = videoData.get(key);
-        if (existing) {
-          videoData.set(key, { ...existing, thumbnail });
-          videos = toIndexedVideos();
-        }
-      }
     }
 
     return {
@@ -583,54 +490,7 @@ const formatResult = (result: ScrapeResult, format: OutputFormat) => {
     return `${JSON.stringify(result, null, 2)}\n`;
   }
 
-  const lines = [
-    "# YouTube Homepage Videos",
-    "",
-    `Scraped at: ${result.scrapedAt}`,
-    `Requested limit: ${result.limit}`,
-    `Videos found: ${result.count}`,
-    "",
-  ];
-
-  if (result.videos.length === 0) {
-    lines.push("No homepage videos were found.");
-    return `${lines.join("\n")}\n`;
-  }
-
-  for (const video of result.videos) {
-    lines.push(
-      `${video.index}. [${escapeMarkdown(video.title)}](${video.url})`,
-    );
-
-    if (video.channel) {
-      const channel = video.channelUrl
-        ? `[${escapeMarkdown(video.channel)}](${video.channelUrl})`
-        : escapeMarkdown(video.channel);
-      lines.push(`   Channel: ${channel}`);
-    }
-
-    if (video.duration) {
-      lines.push(`   Duration: ${escapeMarkdown(video.duration)}`);
-    }
-
-    if (video.metadata.length > 0) {
-      lines.push(
-        `   Metadata: ${video.metadata.map(escapeMarkdown).join(" | ")}`,
-      );
-    }
-
-    if (video.thumbnail) {
-      lines.push(`   Thumbnail: ${video.thumbnail}`);
-    }
-
-    lines.push("");
-  }
-
-  return `${lines.join("\n").trimEnd()}\n`;
-};
-
-const escapeMarkdown = (value: string) => {
-  return value.replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
+  return `${encode(result)}\n`;
 };
 
 const main = async () => {
