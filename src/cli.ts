@@ -1,4 +1,7 @@
 #!/usr/bin/env bun
+import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { Command, InvalidArgumentError, Option } from "commander";
 import { chromium, type Page } from "playwright";
 import { encode } from "@toon-format/toon";
@@ -40,7 +43,8 @@ type ScrapeResult = {
 };
 
 const youtubeHomeUrl = "https://www.youtube.com/";
-const sessionProfile = ".youtube-session";
+const dataDir = join(homedir(), ".ytfeed");
+const sessionProfile = join(dataDir, "youtube-session");
 const machineTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const scrapeTimeoutMs = 30_000;
 const scrollAttempts = 8;
@@ -142,6 +146,8 @@ const mergeScrapedVideo = (
 };
 
 const launchContext = async (headless: boolean) => {
+  await mkdir(dataDir, { recursive: true });
+
   const context = await chromium.launchPersistentContext(sessionProfile, {
     headless,
     viewport: { width: 1440, height: 1200 },
@@ -516,7 +522,7 @@ main().catch((error: unknown) => {
 
   if (/process singleton|user data directory|profile/i.test(message)) {
     console.error(
-      "The scraper stores login data in `.youtube-session`. Run `ytfeed login` if the session needs to be refreshed.",
+      `The scraper stores login data in ${sessionProfile}. Run \`ytfeed login\` if the session needs to be refreshed.`,
     );
   }
 
