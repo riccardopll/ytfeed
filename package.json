@@ -1,7 +1,7 @@
 {
   "name": "ytfeed",
   "version": "0.1.0",
-  "description": "Scrape videos from the YouTube homepage into an LLM-friendly format.",
+  "description": "Scrape videos from your YouTube homepage into an LLM-friendly format.",
   "type": "module",
   "bin": {
     "ytfeed": "dist/ytfeed"

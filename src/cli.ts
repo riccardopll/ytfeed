@@ -59,7 +59,7 @@ const parseArgs = (argv: string[]) => {
   program
     .name("ytfeed")
     .description(
-      "Scrape videos from the YouTube homepage into an LLM-friendly format.",
+      "Scrape videos from your YouTube homepage into an LLM-friendly format.",
     )
     .showHelpAfterError()
     .addHelpText(
