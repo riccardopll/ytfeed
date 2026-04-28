@@ -42,13 +42,36 @@ jobs:
             --minify \
             --env inline \
             --external electron \
+            --external playwright \
+            --external playwright-core \
+            --external chromium-bidi \
             --target="$BUN_TARGET" \
             src/cli.ts \
-            --outfile dist/ytfeed
+            --outfile dist/ytfeed-bin
 
-          mkdir -p "release/$ARCHIVE_ARCH"
-          cp dist/ytfeed "release/$ARCHIVE_ARCH/ytfeed"
-          tar -C "release/$ARCHIVE_ARCH" -czf "dist/ytfeed-${VERSION}-${ARCHIVE_ARCH}-macos.tar.gz" ytfeed
+          mkdir -p "release/$ARCHIVE_ARCH/libexec"
+          cp dist/ytfeed-bin "release/$ARCHIVE_ARCH/libexec/ytfeed-bin"
+          cp package.json bun.lock "release/$ARCHIVE_ARCH/libexec/"
+          (
+            cd "release/$ARCHIVE_ARCH/libexec"
+            bun install --production --frozen-lockfile
+            rm package.json bun.lock
+          )
+
+          cat > "release/$ARCHIVE_ARCH/ytfeed" <<'SH'
+          #!/bin/sh
+          script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+          libexec_dir="$script_dir/libexec"
+          if [ ! -x "$libexec_dir/ytfeed-bin" ]; then
+            libexec_dir="$script_dir/../libexec"
+          fi
+          export NODE_PATH="$libexec_dir/node_modules${NODE_PATH:+:$NODE_PATH}"
+          cd "$libexec_dir" || exit 1
+          exec "$libexec_dir/ytfeed-bin" "$@"
+          SH
+          chmod +x "release/$ARCHIVE_ARCH/ytfeed"
+
+          tar -C "release/$ARCHIVE_ARCH" -czf "dist/ytfeed-${VERSION}-${ARCHIVE_ARCH}-macos.tar.gz" ytfeed libexec
 
       - name: Upload packaged asset
         uses: actions/upload-artifact@v4
